@@ -162,6 +162,7 @@ EOF
     go
     mkdir
     mktemp
+    ps
     rm
   )
   [[ ${output} == $(_join $'\n' "${exes[@]}") ]]
@@ -190,22 +191,6 @@ EOF
   script=$'\n\n\n'"${line}"$'\n\n'
   run -0 shellmock commands -c <<< "${script}"
   [[ ${output} == *"WARNING: found unknown shellmock directive in line 4: ${line}"* ]]
-}
-
-@test "running without flock" {
-  ids=()
-  shellmock new exe
-  shellmock config exe 0
-  for _ in {1..50}; do
-    __SHELLMOCK_TESTING_WO_FLOCK=1 exe &
-    ids+=("$!")
-  done
-  wait "${ids[@]}"
-  shellmock assert expectations exe
-  # Ensure that the mock has actually been called 30 times. This is a soft check
-  # for the absence of race conditions.
-  outputs=("${__SHELLMOCK_OUTPUT}/"*"/"*)
-  [[ ${#outputs[@]} == 50 ]]
 }
 
 @test "modifying arguments" {

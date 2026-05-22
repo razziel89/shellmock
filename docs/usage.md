@@ -73,10 +73,9 @@ You can jump to the respective section via the following links.
 - [config](#config)
     - [argspec Interpretation](#argspec-interpretation)
     - [argspec Definitions](#argspec-definitions)
-        - [Numeric Position-Dependent argspec](#numeric-position-dependent-argspec)
-        - [Incremental Position-Dependent argspec](#incremental-position-dependent-argspec)
-        - [Flexible Position-Independent argspec](#flexible-position-independent-argspec)
-    - [Regex-Based argspec](#regex-based-argspec)
+        - [Position Indicators](#position-indicators)
+        - [Match Types](#match-types)
+        - [Useful Examples](#useful-examples)
     - [Multi-Line Mock Output](#multi-line-mock-output)
     - [Forwarding Calls](#forwarding-calls)
 - [assert](#assert)
@@ -92,6 +91,7 @@ You can jump to the respective section via the following links.
     - [Example](#example)
 - [delete](#delete)
 - [is-mock](#is-mock)
+- [version](#version)
 
 ### new
 
@@ -126,9 +126,10 @@ Furthermore, command names must not contain slashes.
 <!-- shellmock-helptext-start -->
 
 Syntax:
-`shellmock config <name> [<exit_code>|forward[:<arg_adjustment_function>]] [hook:<hook_function>] [1:<argspec> [...]]`
+`shellmock config <name> <exit_code>|forward[:<arg_adjustment_function>] [hook:<hook_function>] [<argspec> [...]]`
 
-The `config` command defines expectations for calls to your mocked executable.
+The `config` command defines expectations for calls to your mocked executable as
+well as actions the mock shall perform.
 You need to define expectations before you can make assertions on your mock.
 You can add multiple configurations for the same mock by calling the `config`
 command multiple times.
@@ -144,12 +145,13 @@ The `config` command takes at least two arguments:
    name of a function that may modify the forwarded arguments.
    See [below](#forwarding-calls) for details on forwarding calls.
 
-Next, you may optionally specify the name of a `bash` function that the mock
-will execute immediately before exiting.
+Next, you may optionally specify the name of a `bash` hook function that the
+mock will execute immediately before exiting.
 The function will be exported automatically.
-Any error calling the hook will be considered an error (also see
-[killparent](#killparent)).
-A hook can be used to perform additional assertions or record additional data.
+Any error calling the hook function will be considered an error by the mock
+(also see [killparent](#killparent)).
+A hook function can be used to perform complex assertions or record additional
+data.
 Since the hook function is run in a sub-process, it cannot modify any shell
 variables and has access only to environment variables.
 The hook function receives all the arguments that the mock has been called with.
@@ -157,10 +159,10 @@ The hook function receives all the arguments that the mock has been called with.
 Every following argument to the `config` command is a so-called `argspec` (see
 below).
 
-The `config` command can also define a command's standard output.
-Everything read from standard input will be echoed by the mock to its standard
-output verbatim.
-There is no way to have the mock write something to standard error.
+The `config` command can also define a mock's standard output.
+Everything the `config` command reads from standard input will be echoed by the
+mock to its standard output verbatim.
+There is no way to have the mock write anything to standard error.
 
 **Example**:
 A call to `git branch` that
@@ -182,12 +184,14 @@ Here strings are known to work for `bash` and `zsh`, for example.
 #### argspec Interpretation
 
 An argspec defines expectations for arguments.
-Only calls to the mock whose arguments match all given expectations will have
-the given exit code and stdout.
+Only calls to the mock whose arguments match all given expectations will behave
+as configured.
+That is, only such calls will have the given exit code, write the given string
+to stdout, and call the given hook function.
 Any call to a mock that has at least one argument not matching any argspec will
 be considered an error (also see [killparent](#killparent)).
 
-Note that matches only happen for given argspecs.
+Note that only specified argspecs are taken into account when matching.
 That is, if you do not provide an argspec for a positional argument, any value
 can be there.
 For example, the line `shellmock config git 0` will cause _any_ invocation of
@@ -220,181 +224,108 @@ fi
 
 #### argspec Definitions
 
-There are three _types_ of argspecs:
-two position-dependent ones (numeric and incremental) and one
-position-independent (flexible) one.
-Position-dependent types should be preferred whenever possible.
+All argspecs follow the same format of
+`<match-type>-<position-indicator>:<expected-value>`.
+An argspec matches only if the actual value at the specified position matches
+the expected value via the match type.
 
-There are also two _kinds_ of argspecs:
-exact string matches and regex-based string matches.
-Exact string matches should be preferred whenever possible.
+**Some example argspecs**:
 
-The _types_ and _kinds_ of argspecs can be combined to create, for example, a
-regex-based position-independent argspec.
+- The argspec `value-1:branch` matches if the first positional argument to the
+  mock is exactly the literal string `branch`.
+- The argspec `regex-any:https?.*` matches if any positional argument to the
+  mock starts with either the string `http` or the string `https`.
+- The argspec `substring-3:git` matches if the third positional argument
+  contains the literal string `git` anywhere.
 
-In general, an argspec looks like this:
-`<position>:<value>`.
-Normal shell-quoting rules apply to argspecs, especially to the `value` part.
+Normal shell-quoting rules apply to argspecs, especially to the `expected-value`
+part.
 That is, to specify an argument with spaces, you need to quote the argspec.
 We recommend quoting only the value because it is easier to read.
 Providing a value containing white space should look like this:
-`3:"some fancy value"`.
+`value-3:"some fancy value"`.
 
-##### Numeric Position-Dependent argspec
+##### Position Indicators
 
-A _numeric position-dependent_ argspec looks like `n:value` where `n` is a
-numeric position indicator and `value` is a literal string value.
-This argspec matches if the argument at position `n` has exactly the value
-`value`.
-Argument counting starts at 1.
-Arguments at undefined positions can be anything.
+A position indicator declares which positional argument shall be matched.
+Position indicators can be positive integers or the literal strings `any` or
+`i`.
 
-**Example**:
-Only specified argspecs matter
+- A positive integer position indicator specifies which argument that the mock
+  received shall be matched.
+  Following how shell scripts specify argument positions, the first argument has
+  the index 1.
+- The position indicator `any` specifies that the match is successful if at
+  least one argument matches.
+- The position indicator `i`, which is short for "increment", specifies that the
+  match is successful if the argument at the next position compared to the
+  previous position indicator matches.
+  If the position indicator preceding an `i` position indicator was an integer,
+  then the `i` is replaced internally by that integer increased by 1.
+  If `i` is used as the first position indicator, it is replaced internally by
+  the number `1`.
+  Note that `i` position indicators must not immediately follow `any` position
+  indicators.
 
-```bash
-shellmock new git
-shellmock config git 0 1:branch
-# Would match the following commands, for example:
-git branch
-git branch -r
+##### Match Types
 
-shellmock config git 0 2:develop
-# Would match the following commands, for example:
-git checkout develop
-git diff develop main
-```
+A match type declares how the actual value shall be matched against the expected
+value.
+Exact string matches should be preferred whenever possible.
+All match types can be _negated_ by prefixing them with an exclamation mark `!`.
+For example `!value-1:branch` matches as long as the first argument is not the
+literal string `branch`.
+The following match types are supported:
 
-While the order of numeric argspecs has no influence, we recommend to define
-numeric argspecs in ascending order.
+- The match type `value` specifies an exact string match.
+  That is, the actual value must be identical to the expected value.
+  For convenience, the `value-` prefix can be left out when specifying an
+  argspec.
+  For example, an argspec of `1:branch` is identical to an argspec of
+  `value-1:branch`.
+- The match type `prefix` specifies an exact string match at the start of the
+  string.
+  That is, the actual value must start with the exact expected value.
+- The match type `suffix` specifies an exact string match at the end of the
+  string.
+  That is, the actual value must end with the exact expected value.
+- The match type `substring` specifies an exact string match anywhere inside the
+  string.
+  That is, the actual value must contain the exact expected value.
+  Note that this includes matching at the start or end of the string.
+- The match type `regex` re-interprets the expected value as a _bash regular
+  expression_.
+  That regular expression is then matched via the comparison
+  `[[ ${actual_value} =~ ${expected_value} ]]`.
+  We _strongly recommend against_ using `regex-1:^branch$` instead of the exact
+  string match `value-1:branch` because of the many special characters in
+  regular expressions.
+  It is very easy to input a character that is interpreted as a special one
+  without realizing that.
+- The match type `set` matches as long as the argument specified by the
+  corresponding position indicator is defined.
+  Note that this is different from being non-empty.
+  The `set` match type takes no expected value.
+  The `set` match type cannot be combined with the `any` position indicator.
 
-**Example**:
-Numeric argspec order
+##### Useful Examples
 
-```bash
-# these mocks are equivalent
-shellmock config git 0 1:checkout 2:develop 3:master
-shellmock config git 0 1:checkout 3:master 2:develop
-```
-
-##### Incremental Position-Dependent argspec
-
-You can also replace the numeric value indicating the expected position of an
-argument by the letter `i`.
-That letter will automatically be replaced by the value used for the previous
-argspec increased by 1.
-If the first argspec uses the `i` placeholder, it will be replaced by `1`.
-Numeric and incremental position indicators can be mixed.
-Note that the position indicator `i` cannot directly follow `any`.
-
-**Example**:
-Incremental argspec
-
-```bash
-shellmock new git
-shellmock config git 0 i:checkout i:-b i:my-branch
-# Would match the following command, for example:
-git checkout -b my-branch master
-
-shellmock config git 0 2:my-branch i:develop
-# Would match the following commands, for example:
-git diff my-branch develop
-git rebase my-branch develop
-```
-
-##### Flexible Position-Independent argspec
-
-A flexible position-independent argspec replaces the position indicator by the
-literal word `any`.
-Thus, if we did not care at which position the `branch` keyword were in the
-first example, we could use:
-`any:branch`.
-
-**Example**:
-Position-independent argspec
-
-```bash
-shellmock new git
-shellmock config git 0 any:develop
-# Would match the following commands, for example:
-git checkout develop
-git push origin develop
-git diff develop main
-```
-
-You can combine position-independent and position-dependent argspecs.
-Note that the position indicator `i` cannot directly follow `any`.
-
-**Example**:
-Combining position-independent and dependent argspecs
-
-```bash
-shellmock new git
-shellmock config git 0 1:checkout any:feature
-# Would match the following commands, for example:
-git checkout feature
-git checkout -b feature
-```
-
-Note that the flexible position independent argspec matches any position.
-That is, even if it precedes a numeric argspec, it can still match later
-arguments.
-
-**Example**:
-Flexible argspecs match anywhere
-
-```bash
-shellmock new git
-shellmock config git 0 any:feature 3:master
-# Would match the following commands, for example:
-git checkout feature master    # -> any matches at position 2
-git diff --raw master feature  # -> any matches at position 4
-```
-
-#### Regex-Based argspec
-
-A regex-based argspec prefixes the numeric or flexible position indicator by the
-literal word `regex-` (mind the hyphen!).
-Specify the argspec as `regex-n:value` (with n being a positive integer) or
-`regex-any:value`.
-You _cannot_ combine it with the flexible position indicator `i`, though.
-
-With such an argspec, `value` will be re-interpreted as a _bash regular
-expression_ matched via the comparison `[[ ${argument} =~ ${value} ]]`.
-
-**Example**:
-Regex-based argspecs
-
-```bash
-shellmock new git
-shellmock config git 0 regex-2:^feature
-# Would match the following commands, for example:
-git checkout feature/foobar
-git merge feature/barbaz
-
-shellmock config git 0 regex-any:^feature
-# Would match the following commands, for example:
-git checkout -b feature/foobar
-git merge feature/barbaz
-```
-
-We _strongly recommend against_ using `regex-1:^branch$` instead of the exact
-string match `1:branch` because of the many special characters in regular
-expressions.
-It is very easy to input a character that is interpreted as a special one
-without realizing that.
-You can, of course, combine string and regex based argspecs.
-
-**Example**:
-Combining string-based and regex-based argspecs
-
-```bash
-shellmock new git
-shellmock config git 0 1:checkout regex-any:^feature
-# Would match the following commands, for example:
-git checkout feature/foobar
-git checkout -b feature/barbaz master
-```
+- A `curl` mock is called but no argument is exactly `POST`.
+  This can be realised by using the `any` position indicator with the `value`
+  match type while negating the match:
+  `shellmock config curl 0 !value-any:"POST"`
+- A `jq` mock is called and the 3rd argument does contain at least one space.
+  This can be realised using the `substring` match type with an integer position
+  indicator:
+  `shellmock config jq 0 substring-3:" "`
+- A `git` mock shall be called with exactly 4 arguments of arbitrary values.
+  This can be realised by checking whether the 4th argument is set while the
+  next one is unset:
+  `shellmock config git 0 set-4: !set-i:`
+- An `az` mock shall be called with a non-empty 1st argument.
+  This can be realised by checking whether the 1st argument is not equal to the
+  empty string:
+  `shellmock config az 0 !value-1:""`
 
 #### Multi-Line Mock Output
 
@@ -445,10 +376,10 @@ shellmock config git 0 1:tag 2:--list <<< $'first\nsecond\n'
 #### Forwarding Calls
 
 It can be desirable to mock only some calls to an executable.
-For example, you may want to mock only `POST` request sent via `curl` but `GET`
-requests should still be issued.
-Or you may want to mock all calls to `git push` while other commands should
-still be executed.
+For example, you may want to mock only `POST` requests sent via `curl` but `GET`
+requests should still be executed by the actual `curl` executable.
+Or you may want to mock all calls to `git push` while other `git` commands
+should still be executed.
 
 You can forward specific calls to an executable by specifying only the literal
 string `forward` as the second argument to the `config` command.
@@ -476,7 +407,8 @@ shellmock new git
 # Mocking all push commands, i.e. calls that have the literal string push as
 # first argument.
 shellmock config git 0 1:push
-# Forwarding all other calls. Specific configurations have to go first.
+# Forwarding all other calls. As mocks are matched in order of defintion,
+# more specific configurations have to come first.
 shellmock config git forward
 ```
 
@@ -582,7 +514,7 @@ There are currently the following types of assertions.
   This assertion will check that each set of argspecs defined for it had been
   used at least once.
 - `expectations`:
-  This assertion will first perform the following assertions in sequence:
+  This assertion will perform the following assertions in sequence:
   `only-expected-calls`, and `call-correspondence`.
   It is a convenience assertion type combining all other assertions.
 
@@ -761,7 +693,7 @@ That is, it will send `SIGTERM` to its parent process.
 This behaviour means to ensure that tests do not progress past an unexpected
 call to the mock.
 If the mock were simply to exit with a non-zero exit code, there would be no
-difference to defining an non-zero return value.
+difference to defining an non-zero exit code.
 Such a case could easily be caught by the parent process and cause the test to
 take unexpected paths through the code.
 

@@ -64,8 +64,10 @@ rm_mock_path() {
       unset "paths[${idx}]"
     fi
   done
-  local new_path
-  IFS=: new_path="${paths[*]}"
+  local new_path ifs="${IFS}"
+  IFS=:
+  new_path="${paths[*]}"
+  IFS="${ifs}"
   export PATH="${new_path}"
 }
 
@@ -73,14 +75,18 @@ rm_mock_path() {
 binary_deps_check() {
   local has_err=0
   local cmd
-  for cmd in base32 cat mkdir; do
+  local deps=(base32 cat mkdir)
+  if [[ ! -d /proc ]]; then
+    deps+=(ps)
+  fi
+  for cmd in "${deps[@]}"; do
     if ! PATH="${__SHELLMOCK_ORGPATH}" command -v "${cmd}" &> /dev/null; then
-      echo >&2 "Required executable ${cmd} not found."
+      echo >&2 "Required executable ${cmd@Q} not found."
       has_err=1
     fi
   done
   if ! command -v flock &> /dev/null; then
-    echo >&2 "SHELLMOCK: Optional executable flock not found." \
+    echo >&2 "Optional executable flock not found." \
       "Please install for best performance."
   fi
   if [[ ${has_err} != 0 ]]; then
@@ -88,6 +94,35 @@ binary_deps_check() {
     return 1
   fi
   return 0
+}
+
+_check_w_flock() {
+  local cmd_b32=$1
+  local count=$2
+  local outdir=$3
+
+  (
+    flock -n 9 || exit 1
+    PATH="${__SHELLMOCK_ORGPATH}" mkdir "${outdir}" &> /dev/null
+  ) 9> "${__SHELLMOCK_OUTPUT}/lockfile_${cmd_b32}_${count}"
+}
+
+_check_wo_flock() {
+  local cmd_b32=$1
+  local count=$2
+  local outdir=$3
+
+  PATH="${__SHELLMOCK_ORGPATH}" \
+    mkdir "${__SHELLMOCK_OUTPUT}/lockfile_${cmd_b32}_${count}" &> /dev/null \
+    && PATH="${__SHELLMOCK_ORGPATH}" mkdir "${outdir}" &> /dev/null
+}
+
+_cleanup_wo_flock() {
+  local cmd_b32="$1"
+  local count="$2"
+
+  PATH="${__SHELLMOCK_ORGPATH}" \
+    rm -rf "${__SHELLMOCK_OUTPUT}/lockfile_${cmd_b32}_${count}"
 }
 
 get_and_ensure_outdir() {
@@ -103,13 +138,16 @@ get_and_ensure_outdir() {
   tmp=$((max_num_calls - 1))
   local max_digits=${#tmp}
 
-  # shellmock: uses-command=flock
-  local _flock=flock
+  local check cleanup
   if
     ! command -v flock &> /dev/null \
       || [[ ${__SHELLMOCK_TESTING_WO_FLOCK-0} == 1 ]]
   then
-    _flock=true
+    check=_check_wo_flock
+    cleanup=_cleanup_wo_flock
+  else
+    check=_check_w_flock
+    cleanup=true
   fi
 
   # Ensure no two calls overwrite each other in a thread-safe way.
@@ -117,11 +155,8 @@ get_and_ensure_outdir() {
   padded=$(printf "%0${max_digits}d" "${count}")
   PATH="${__SHELLMOCK_ORGPATH}" mkdir -p "${__SHELLMOCK_OUTPUT}/${cmd_b32}"
   local outdir="${__SHELLMOCK_OUTPUT}/${cmd_b32}/${padded}"
-  while ! (
-    # Increment the counter until we find one that has not been used before.
-    "${_flock}" -n 9 || exit 1
-    PATH="${__SHELLMOCK_ORGPATH}" mkdir "${outdir}" &> /dev/null
-  ) 9> "${__SHELLMOCK_OUTPUT}/lockfile_${cmd_b32}_${count}"; do
+  # Increment the counter until we find one that has not been used before.
+  while ! "${check}" "${cmd_b32}" "${count}" "${outdir}"; do
     count=$((count + 1))
     padded=$(printf "%0${max_digits}d" "${count}")
     outdir="${__SHELLMOCK_OUTPUT}/${cmd_b32}/${padded}"
@@ -134,6 +169,7 @@ get_and_ensure_outdir() {
       return 1
     fi
   done
+  "${cleanup}" "${cmd_b32}" "${count}"
 
   echo "${outdir}"
 }
@@ -165,32 +201,86 @@ output_args_and_stdin() {
   fi
 }
 
-_find_arg() {
-  local arg="$1"
-  shift
-  local args=("$@")
+_match_arg() {
+  local kind="$1"
+  local value="$2"
+  local null_value="$3"
+  local cmp="$4"
 
-  local check
-  for check in "${args[@]}"; do
-    if [[ ${arg} == "${check}" ]]; then
-      return 0
-    fi
-  done
-
-  return 1
+  case "${kind}" in
+  "" | value)
+    [[ ${value} == "${cmp}" ]]
+    ;;
+  substring)
+    [[ ${value} == *"${cmp}"* ]]
+    ;;
+  prefix)
+    [[ ${value} == "${cmp}"* ]]
+    ;;
+  suffix)
+    [[ ${value} == *"${cmp}" ]]
+    ;;
+  regex)
+    [[ ${value} =~ ${cmp} ]]
+    ;;
+  set)
+    [[ -n ${value} || ${null_value} != NULL ]]
+    ;;
+  *)
+    echo >&2 "Internal error, unknown argspec kind ${kind@Q}."
+    _kill_parent
+    ;;
+  esac
 }
 
-_find_regex_arg() {
-  local regex="$1"
-  shift
+_find_arg() {
+  local kind="$1"
+  local cmp="$2"
+  shift 2
   local args=("$@")
 
   local check
-  for check in "${args[@]}"; do
-    if [[ ${check} =~ ${regex} ]]; then
-      return 0
-    fi
-  done
+  case "${kind}" in
+  "" | value)
+    for check in "${args[@]}"; do
+      if [[ ${check} == "${cmp}" ]]; then
+        return 0
+      fi
+    done
+    ;;
+  substring)
+    for check in "${args[@]}"; do
+      if [[ ${check} == *"${cmp}"* ]]; then
+        return 0
+      fi
+    done
+    ;;
+  prefix)
+    for check in "${args[@]}"; do
+      if [[ ${check} == "${cmp}"* ]]; then
+        return 0
+      fi
+    done
+    ;;
+  suffix)
+    for check in "${args[@]}"; do
+      if [[ ${check} == *"${cmp}" ]]; then
+        return 0
+      fi
+    done
+    ;;
+  regex)
+    for check in "${args[@]}"; do
+      if [[ ${check} =~ ${cmp} ]]; then
+        return 0
+      fi
+    done
+    ;;
+  *)
+    echo >&2 "Internal error, unknown argspec kind ${kind@Q}."
+    _kill_parent
+    ;;
+  esac
 
   return 1
 }
@@ -203,25 +293,43 @@ _match_spec() {
 
   local spec
   while IFS= read -d $'\0' -r spec; do
-    local id val
-    id="${spec%%:*}"
+    local id val kind
     val="${spec#*:}"
 
-    if [[ ${spec} =~ ^any: ]]; then
-      if ! _find_arg "${val}" "$@"; then
+    # Negative any match.
+    if [[ ${spec} =~ ^!([^-:][^-:]*-any|any): ]]; then
+      spec=${spec#"!"}
+      kind=${spec%%":"*}
+      kind=${kind%"any"}
+      kind=${kind%"-"}
+      if _find_arg "${kind}" "${val}" "$@"; then
         return 1
       fi
-    elif [[ ${spec} =~ ^[0-9][0-9]*: ]]; then
-      if [[ ${val} != "${!id-}" ]]; then
+    # Positive any match.
+    elif [[ ${spec} =~ ^([^-:][^-:]*-any|any): ]]; then
+      kind=${spec%%":"*}
+      kind=${kind%"any"}
+      kind=${kind%"-"}
+      if ! _find_arg "${kind}" "${val}" "$@"; then
         return 1
       fi
-    elif [[ ${spec} =~ ^regex-any: ]]; then
-      if ! _find_regex_arg "${val}" "$@"; then
+    # Negative positional match.
+    elif [[ ${spec} =~ ^!([^-:][^-:]*-[0-9][0-9]*|[0-9][0-9]*): ]]; then
+      spec=${spec#"!"}
+      kind=${spec%%":"*}
+      id=${kind#*"-"}
+      kind=${kind%%"${id}"}
+      kind=${kind%%"-"}
+      if _match_arg "${kind}" "${!id-}" "${!id-NULL}" "${val}"; then
         return 1
       fi
-    elif [[ ${spec} =~ ^regex-[0-9][0-9]*: ]]; then
-      id="${id##regex-}"
-      if ! [[ ${!id-} =~ ${val} ]]; then
+    # Positive positional match.
+    elif [[ ${spec} =~ ^([^-:][^-:]*-[0-9][0-9]*|[0-9][0-9]*): ]]; then
+      kind=${spec%%":"*}
+      id=${kind#*"-"}
+      kind=${kind%%"${id}"}
+      kind=${kind%%"-"}
+      if ! _match_arg "${kind}" "${!id-}" "${!id-NULL}" "${val}"; then
         return 1
       fi
     else
@@ -244,7 +352,16 @@ _is_bats_process() {
   fi
 
   local cmd_w_args
-  mapfile -t -d $'\0' cmd_w_args < "/proc/${process}/cmdline"
+  if
+    [[ -f "/proc/${process}/cmdline" && ${__SHELLMOCK_TESTING_WO_PROC-0} != 1 ]]
+  then
+    mapfile -t -d $'\0' cmd_w_args < "/proc/${process}/cmdline"
+  else
+    local ps_output && ps_output=$(
+      PATH="${__SHELLMOCK_ORGPATH}" ps -p "${process}" -o command=
+    )
+    mapfile -t -d ' ' cmd_w_args <<< "${ps_output}"
+  fi
   # The first entry in cmd_w_args would be "bash" and the second one the bats
   # script if our parent process were a bats process. Such a bats script is in
   # bats's libexec directory.
@@ -265,7 +382,16 @@ _kill_parent() {
   fi
 
   local cmd_w_args
-  mapfile -t -d $'\0' cmd_w_args < "/proc/${parent}/cmdline"
+  if
+    [[ -f "/proc/${parent}/cmdline" && ${__SHELLMOCK_TESTING_WO_PROC-0} != 1 ]]
+  then
+    mapfile -t -d $'\0' cmd_w_args < "/proc/${parent}/cmdline"
+  else
+    local ps_output && ps_output=$(
+      PATH="${__SHELLMOCK_ORGPATH}" ps -p "${parent}" -o command=
+    )
+    mapfile -t -d ' ' cmd_w_args <<< "${ps_output}"
+  fi
   errecho "Killing parent process: ${cmd_w_args[*]@Q}"
   kill "${parent}"
 }
@@ -303,7 +429,7 @@ provide_output() {
   local cmd_spec="$1"
   # Base32 encoding is an easy way to be able to store arbitrary data in
   # environment variables.
-  output_base32="MOCK_OUTPUT_BASE32_${cmd_spec}"
+  local output_base32="MOCK_OUTPUT_BASE32_${cmd_spec}"
   if [[ -n ${!output_base32-} ]]; then
     PATH="${__SHELLMOCK_ORGPATH}" base32 --decode <<< "${!output_base32}"
   fi
@@ -376,7 +502,7 @@ forward() {
     if ! {
       mapfile -t -d $'\0' updated_args < <(
         # The function will be invoked indirectly by the forward function.
-        # shellcheck disable=SC2317
+        # shellcheck disable=SC2317,SC2329
         update_args() {
           local arg && for arg in "$@"; do printf -- '%s\0' "${arg}"; done
         }

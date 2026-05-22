@@ -740,3 +740,75 @@ indices, cannot continue: 2 1"
   # Check that the function receives arguments.
   [[ $(cat "${BATS_TEST_TMPDIR}/args") == "arg another_arg" ]]
 }
+
+@test "extended convenience match types" {
+  shellmock new my_exe
+  shellmock config my_exe 0 \
+    1:first \
+    value-2:second \
+    i:third \
+    substring-4:our \
+    prefix-5:fif \
+    suffix-6:xth \
+    any:any \
+    substring-any:-any- \
+    prefix-any:any- \
+    suffix-any:-any
+
+  run my_exe \
+    first second third fourth fifth sixth seventh eighth ninth \
+    any bogus-any any-bogus bogus-any-bogus
+  shellmock assert expectations my_exe
+}
+
+@test "incremental extended convenience match types" {
+  shellmock new my_exe
+  shellmock config my_exe 0 \
+    i:first \
+    value-i:second \
+    i:third \
+    substring-i:our \
+    prefix-i:fif \
+    suffix-i:xth \
+    regex-i:"^seven"
+
+  run my_exe \
+    first second third fourth fifth sixth seventh
+  shellmock assert expectations my_exe
+}
+
+@test "negative value match" {
+  shellmock new my_exe
+  shellmock config my_exe 0 !1:first
+
+  run -0 my_exe second
+
+  shellmock assert expectations my_exe
+}
+
+@test "negative value match fails" {
+  shellmock new my_exe
+  shellmock config my_exe 0 !1:first
+
+  run ! my_exe first
+}
+
+@test "negative extended convenience match types" {
+  shellmock new my_exe
+  shellmock config my_exe 0 \
+    !1:second \
+    !value-2:first \
+    !i:fourth \
+    !substring-4:ift \
+    !prefix-5:fou \
+    !suffix-6:fth \
+    !any:any \
+    !substring-any:-any- \
+    !prefix-any:any- \
+    !suffix-any:-any
+
+  run -0 my_exe \
+    first second third fourth fifth sixth seventh eighth ninth
+
+  shellmock assert expectations my_exe
+}

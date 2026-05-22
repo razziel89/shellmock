@@ -50,6 +50,7 @@ The following tools are needed to use `shellmock`:
 - `chmod`
 - `mkdir`
 - `mktemp`
+- `ps` (on systems without the `/proc` file system)
 - `rm`
 
 On Debian-based systems, if they are not already pre-installed, they can be
@@ -59,7 +60,7 @@ installed via:
 sudo apt install -yqq bash coreutils
 ```
 
-You also need the [bats-core] testing framework that
+We also strongly recommend the [bats-core] testing framework that
 [can be installed via npm following its docs][bats-npm-install].
 We recommend an installation via `npm` instead of an installation via `apt`.
 The reason is that many system packages provide comparatively old versions while

@@ -111,19 +111,21 @@ setup() {
   shellmock new git
   # Configure the mock to have an exit code of 1 if it is called with the
   # rev-parse command for a feature branch. This simulates git reporting that
-  # the branch does not exist. We match an argument at any position with a bash
-  # regular expression.
-  shellmock config git 1 1:rev-parse regex-any:"^feature/.*$"
+  # the branch does not exist. We use a prefix match at any position.
+  shellmock config git 1 1:rev-parse prefix-any:"feature/"
   # Configure the mock to have an exit code of 0 if it is called with the
   # branch command and a specific branch name. We match the branch name, which
   # is argument 2, with a bash regular expression.
   shellmock config git 0 1:branch regex-2:"^feature/.*$"
   # Configure the mock to have an exit code of 0 if it is called with the
   # branch command and the -l argument. The mock will write "* some branch" to
-  # stdout. The first matching config will be used.
-  shellmock config git 0 1:branch 2:-l <<< "* some_branch"
-  # The checkout command should also succeed for any feature branch.
-  shellmock config git 0 1:checkout regex-2:"^feature/.*$"
+  # stdout. The first matching config will be used. Using value-1 or just 1 on
+  # the left side of an argspec is identical, the former is just more explicit.
+  shellmock config git 0 value-1:branch 2:-l <<< "* some_branch"
+  # The checkout command should also succeed for any branch whose name
+  # contains the word "/some-". Branch designations typically start with the
+  # type followed by a slash and then followed by the actual name.
+  shellmock config git 0 1:checkout substring-2:"/some-"
   run "${script}" "feature/some-feature"
   shellmock assert expectations git
   [[ ${status} == 0 ]]

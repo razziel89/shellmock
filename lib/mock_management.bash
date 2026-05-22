@@ -114,10 +114,10 @@ __shellmock_assert_no_duplicate_argspecs() {
 
   declare -A arg_idx_count=()
   declare -a duplicate_arg_indices=()
-  local count arg
+  local count arg idx
   for arg in "${args[@]}"; do
     idx=${arg%%:*}
-    idx=${idx#regex-}
+    idx=${idx#*"-"}
     if [[ ${idx} == any ]]; then
       continue
     fi
@@ -185,10 +185,55 @@ __shellmock__config() {
   fi
 
   # Validate input format.
-  local arg
-  local args=()
-  local has_err=0
-  local regex='^(regex-[0-9][0-9]*|regex-any|i|[0-9][0-9]*|any):'
+  local arg args=() has_err=0
+  local regex ifs="${IFS}"
+
+  local regex_parts=(
+    "i"
+    "[0-9][0-9]*"
+    "any"
+    "value-[0-9][0-9]*"
+    "value-any"
+    "value-i"
+    "substring-[0-9][0-9]*"
+    "substring-any"
+    "substring-i"
+    "prefix-[0-9][0-9]*"
+    "prefix-any"
+    "prefix-i"
+    "suffix-[0-9][0-9]*"
+    "suffix-any"
+    "suffix-i"
+    "regex-[0-9][0-9]*"
+    "regex-any"
+    "regex-i"
+    "set-[0-9][0-9]*"
+    "set-i"
+    "!i"
+    "![0-9][0-9]*"
+    "!any"
+    "!value-[0-9][0-9]*"
+    "!value-any"
+    "!value-i"
+    "!substring-[0-9][0-9]*"
+    "!substring-any"
+    "!substring-i"
+    "!prefix-[0-9][0-9]*"
+    "!prefix-any"
+    "!prefix-i"
+    "!suffix-[0-9][0-9]*"
+    "!suffix-any"
+    "!suffix-i"
+    "!regex-[0-9][0-9]*"
+    "!regex-any"
+    "!regex-i"
+    "!set-[0-9][0-9]*"
+    "!set-i"
+  )
+  IFS="|"
+  regex="^(${regex_parts[*]}):"
+  IFS="${ifs}"
+
   for arg in "$@"; do
     if ! [[ ${arg} =~ ${regex} ]]; then
       echo >&2 "Incorrect format of argspec: ${arg}"
@@ -206,21 +251,34 @@ __shellmock__config() {
     return 1
   fi
 
-  # Convert incremented arg counters.
-  local new_arg arg last_count=0 updated_args=()
+  # Check for "set" argspecs with values, which is not allowed.
   for arg in "${args[@]}"; do
-    if [[ ${arg} == "i:"* ]]; then
+    if
+      [[ ${arg} == "set-"* && -n ${arg#*:} ]] \
+        || [[ ${arg} == "!set-"* && -n ${arg#*:} ]]
+    then
+      echo >&2 "Argspec of type 'set' must not have a value after the colon."
+      return 1
+    fi
+  done
+
+  # Convert incremented arg counters.
+  local new_arg arg last_count=0 updated_args=() left
+  for arg in "${args[@]}"; do
+    left="${arg%%:*}"
+    if [[ ${left} == "i" || ${left} == "!i" || ${left} == *"-i" ]]; then
       if [[ -z ${last_count} ]]; then
         echo >&2 "Cannot use non-numerical last counter as increment base."
         return 1
       fi
       last_count=$((last_count + 1))
-      new_arg="${last_count}:${arg#i:}"
+      new_arg="${arg/"i:"/"${last_count}:"}"
     else
       new_arg="${arg}"
       # Only use counter as increment base if one was given.
-      if [[ ${arg%%:*} =~ [0-9][0-9]* ]]; then
+      if [[ ${arg} =~ ^([^-:][^-:]*-[0-9][0-9]*|[0-9][0-9]*): ]]; then
         last_count="${arg%%:*}"
+        last_count="${last_count#*-}"
       else
         last_count=
       fi
@@ -369,7 +427,7 @@ __shellmock__assert() {
       done
     ) && wait $! || return 1
 
-    local has_err=0
+    local has_err=0 argspec
     for argspec in "${expected_argspecs[@]}"; do
       if ! [[ " ${actual_argspecs[*]} " == *"${argspec}"* ]]; then
         has_err=1
@@ -417,7 +475,7 @@ __shellmock_jsonify_string() {
 __shellmock_jsonify_array() {
   local indent="${1}"
   shift
-  local args=("$@")
+  local idx args=("$@")
   # Assume first line will already be indented properly by caller.
   echo "["
   for idx in "${!args[@]}"; do
@@ -462,6 +520,7 @@ __shellmock__calls() {
     done
   ) && wait $! || return 1
 
+  local call_idx
   for call_idx in "${!call_ids[@]}"; do
     local call_id="${call_ids[${call_idx}]}"
     local call_num=$((call_idx + 1))

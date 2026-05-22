@@ -51,9 +51,10 @@ format:
 .PHONY: test
 test: build
 	echo >&2 "Running tests for version $${BASH_VERSION}."
-	bats --jobs "$$(nproc --all)" --print-output-on-failure ./tests/*.bats
+	bats --print-output-on-failure ./tests/*.bats
 
 DOWNLOAD_URL_PREFIX := https://mirror.kumi.systems/gnu/bash/
+C_FLAGS += -std=gnu17 -Wno-implicit-function-declaration -Wno-implicit-int
 
 .PHONY: build-bash-version
 build-bash-version:
@@ -63,7 +64,7 @@ build-bash-version:
 	curl -fL -o bash.tar.gz "$(DOWNLOAD_URL_PREFIX)/bash-$(BASH_VERSION).tar.gz" && \
 	tar -xvzf bash.tar.gz && \
 	cd "bash-$(BASH_VERSION)" && \
-	./configure && \
+	./configure CFLAGS="$(C_FLAGS)" && \
 	attempt=0 && while [[ "$${attempt}" -lt 3 ]]; do \
 		make --jobs "$$(nproc --all)" && break; \
 		attempt=$$((attempt+1)); \
@@ -82,7 +83,7 @@ test-bash-version:
 	echo >&2 "INFO: using $$(which bash) @ $$(bash -c 'echo $${BASH_VERSION}')" && \
 	$(MAKE) test TEST_SHELL="$$(which bash)"
 
-SUPPORTED_VERSIONS ?= 5.2 5.1 5.0 4.4
+SUPPORTED_VERSIONS ?= 5.3 5.2 5.1 5.0 4.4
 
 .PHONY: test-bash-versions
 test-bash-versions: build
